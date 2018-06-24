@@ -1,0 +1,8 @@
+Skal hest være asyncront/multitheraded.
+Rust er opp til meg.
+Se etter lettetst mulig måte a finne endringe på disk.
+Samle endringer i en heap, commite etter en gitt tid/antall endringer.
+Gitfs sit fs er sjeff/force commit alle endringer.
+
+
+.git-fuse inne i mapper for å hindre sletting.
