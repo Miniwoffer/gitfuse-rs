@@ -14,7 +14,8 @@ use git2::Repository;
 
 fn main() {
 
-    let filesys = filesystem::GitFilesystem::new("test_repository","TEST");
+
+    //let filesys = filesystem::GitFilesystem::new("test_repository","TEST");
     let path = Path::new("./test_filesystem");
     fuse::mount(filesys,&path,&[]).unwrap();
 }
