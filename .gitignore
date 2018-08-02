@@ -1,2 +1,4 @@
+/test_filesystem
+/test_repository
 /target
 **/*.rs.bk
