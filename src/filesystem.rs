@@ -1,49 +1,174 @@
-use git2::{Repository,Tree,Oid,ResetType,TreeBuilder,TreeEntry,Signature,Time};
+use git2::{Repository,Tree,Oid,ResetType,TreeBuilder,TreeEntry,Signature,Time,Blob};
 use fuse::*;
 
 use std::fs::File;
 use std::io::Write;
 use std::ffi::OsStr;
 use std::path::Path;
-use std::collections::BTreeMap;
+use std::collections::VecDeque;
 
 use libc::c_int;
 use time::Timespec;
+use time::SteadyTime;
+use time::Duration;
 
-pub struct GitFilesystem{
+// GENERAL TODO list
+// Change strings to str with proper lifetimes
+//
+
+
+// TODO: Move inodeCollocion into a seperate mod
+pub struct InodeEntry<'entry> {
+    valid_until : SteadyTime,
+    path : &'entry str,
+}
+
+pub struct InodeCollection<'a> {
+    inodes : VecDeque<InodeEntry<'a>>,
+    inodeoffset : u64,
+    ttl : Duration,
+}
+impl<'a> InodeCollection<'a> {
+    fn new (ttl : Option<usize>) -> InodeCollection<'a> {
+        InodeCollection {
+            inodes : VecDeque::new(),
+            inodeoffset : 0u64,
+            ttl : match ttl {
+                Some(t) => Duration::seconds(t as i64),
+                None => Duration::seconds(2i64),
+            }
+        }
+    }
+    fn clean(&mut self) {
+        //removes all inodes that have expired
+        let cur_time = SteadyTime::now();
+        loop {
+            match self.inodes.front() {
+                Some(e) => if e.valid_until > cur_time {
+                    break;
+                },
+                None => break,
+            }
+            self.inodes.pop_front();
+            self.inodeoffset += 1;
+        }
+
+    }
+
+    fn insert(&mut self, path : &'a str) -> u64 {
+
+        self.inodes.push_back(InodeEntry {
+            path,
+            valid_until : SteadyTime::now()+self.ttl,
+        });
+        return self.inodeoffset + self.inodes.len() as u64;
+    }
+    fn remove(&mut self, inode : u64){
+        // do nothing since removing an element in the middle will break the list
+    }
+    fn get(&mut self, inode : u64) -> Option<&str> {
+        self.clean();
+        match self.inodes.get((inode-self.inodeoffset) as usize) {
+            Some(e) => Some(e.path),
+            None => None,
+        }
+    }
+}
+
+pub struct FilesystemEntry<'a> {
+    name : &'a str,
+    original : boolean,
+    file_type : FileType,
+    oid : Option<Oid>,
+    children : Vec<FilesystemEntry<'a>>,
+}
+pub enum Filetype {
+    folder,
+    file,
+}
+impl<'a> FilesystemEntry<'a> {
+    pub fn new(file_type : FileType) -> FilesystemEntry<'a> {
+        FilesystemEntry{
+            original: false,
+            file_type,
+            oid : None,
+            children : Vec::new(),
+
+        }
+    }
+    pub fn fromTree(tree : &Tree, repo : &Repository, name : &'a str) -> FilesystemEntry<'a> {
+        let mut children  = Vec::new();
+        for entry in tree {
+            children.push(File::fromEntry(entry,repo));
+        }
+        FilesystemEntry{
+            name,
+            original: true,
+            file_type : FileType::folder,
+            oid : tree.id,
+            children,
+
+        }
+    }
+    pub fn fromTreeEntry( treeEntry : &TreeEntry, repo : &Repository) -> FilesystemEntry<'a> {
+        match treeEntry.kind() {
+            Some(t) => {
+                match t {
+                    Tree => {
+                        FilesystemEntry::fromTree(treeEntry.to_object(repo).unwrap().into_tree().unwrap(),
+                                                  treeEntry.name().unwrap());
+                    },
+                    _ => {
+                        FilesystemEntry{
+                            name : treeEntry.name().unwrap(),
+                            original: true,
+                            file_type : FileType::file,
+                            oid : treeEntry.id().unwrap(),
+                            children : Vec::new(),
+                        }
+
+                    }
+                }
+            }
+            None => {
+                panic!("No file type found")
+            }
+        };
+    }
+}
+
+pub struct GitFilesystem<'collection,'a>{
     repository : Repository,
     new_tree : Oid,
     commit_time : Timespec,
-    referance : String,
-    inods : BTreeMap<u64,String>,
-    inodeBack : u64,
-    inodeFront : u64,
+    referance : &'collection str,
+    inods : InodeCollection<'a>,
+    ttl : usize,
 }
-impl GitFilesystem {
-    fn new (referance : String) -> GitFilesystem {
-        let mut repository = match Repository::open("test_repository") {
+impl<'collection,'a> GitFilesystem<'collection,'a> {
+    pub fn new (repo_path : &str,referance : &'collection str) -> GitFilesystem<'collection,'a> {
+        let mut repository = match Repository::open(repo_path) {
             Ok(repo) => repo,
             Err(e) => panic!("failed to open: {}", e),
         };
 
         //TODO: might want to use as_commit() instead of peel_to_commit
-        let curr_commit = repository.revparse_single(referance.as_str()).unwrap().peel_to_commit().unwrap();
+        let curr_commit = repository.revparse_single(referance).unwrap().peel_to_commit().unwrap();
         let curr_tree = curr_commit.tree().unwrap();
 
         //Writes a copy of the current tree to git and saves the Oid, this is to hinder the original tree from getting deleted.
         let new_tree = repository.treebuilder(Some(&curr_tree)).unwrap().write().unwrap();
 
         //commit do not have nano seconds so sett it to 0
-        let commit_time = time::Timespec::new(curr_commit.time().seconds(), 0);
+        let commit_time = Timespec::new(curr_commit.time().seconds(), 0);
 
         GitFilesystem {
             repository,
             new_tree,
             commit_time,
             referance,
-            inods: BTreeMap::new(),
-            inodeBack : 0u64,
-            inodeFront : 0u64
+            inods : InodeCollection::new(Some(10)),
+            ttl : 10,
         }
     }
     fn getTree(&mut self) -> TreeBuilder {
@@ -98,25 +223,21 @@ impl GitFilesystem {
     }
 
     fn commit(&mut self) {
-        let last_commit = repository.revparse_single(referance.as_str()).unwrap().peel_to_commit().unwrap();
+        let last_commit = self.repository.revparse_single(self.referance).unwrap().peel_to_commit().unwrap();
         let tree = self.repository.find_tree(self.new_tree).unwrap();
         let sign = Signature::now("git-fs","").unwrap();
 
         //TODO: Do we update the ref? if not we need to find another way to get "last_commit"
-        self.repository.commit(referance.as_str(),
+        self.repository.commit(Some(self.referance),
                                &sign,
                                &sign,
                                "Automated commit from git-fs",
                                &tree,
-                               last_commit);
-    }
-
-    fn get_new_inode() {
-
+                               &[&last_commit]);
     }
 }
 
-impl Filesystem for GitFilesystem {
+impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
 
     fn init(&mut self, _req: &Request) -> Result<(), c_int> {
         //we construct elsewhere
@@ -125,26 +246,32 @@ impl Filesystem for GitFilesystem {
     fn destroy(&mut self, _req: &Request) {
         self.commit();
     }
-    fn lookup(&mut self, _req: &Request, _parent: u64, name: &OsStr, reply: ReplyEntry) {
-        match self.repository.find_tree(self.new_tree).unwrap().get_path(name) {
-            Ok(o) => match o {
-                Some(entry) => {
-                    let fileAtr = self.getAttrs(entry);
-                    //TODO: what should ttl be?
-                    reply.entry(&Timespec::new(1,0,),&fileAtr,0);
+    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        match self.inods.get(parent) {
+            Some(p) => {
+                let path = Path::new((p.to_string()+"/"+name.to_str().unwrap()).as_str());
+                match self.repository.find_tree( self.new_tree).unwrap().get_path(path) {
+                    Ok(entry) => {
+                        let fileAtr = self.getAttrs(entry);
+                        fileAtr.ino = self.inods.insert(path.to_str().unwrap());
+                        reply.entry(
+                            &(Timespec::new(0,0)+self.inods.ttl),
+                            & fileAtr,
+                            0);
+                    }
+                    Err(e) => {
+                        //TODO: Check if the error is "not found"
+                        reply.error(2);
+                    }
                 }
-                None => {
-                    reply.error(2);
-                }
-            }
-            Err(e) => {
-                panic!(e);
-            }
-
+            },
+            None => {
+                reply.error(2);
+            },
         }
     }
     fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {
-
+        //Do nothing, we never forget a ino
     }
     fn getattr(&mut self, _req: &Request, _ino: u64, reply: ReplyAttr) {
 
@@ -230,22 +357,13 @@ impl Filesystem for GitFilesystem {
         newname: &OsStr,
         reply: ReplyEmpty
     ) {
-        let new_tree_builder = self.getTree();
-
+        let mut new_tree_builder = self.getTree();
+        let mut file_id : Oid;
         match new_tree_builder.get(name) {
             Ok(a) => {
                 match a {
                     Some(e) => {
-                        new_tree_builder.remove(name).unwrap();// panic on error
-                        match new_tree_builder.insert(newname,e.id(),e.filemode()) {
-                            Ok(entry) => {
-                                reply.ok();
-                            }
-                            Err(e) => {
-                                println!("{}",e); // TODO: find what errors exist
-                                reply.error(17); // lets just say that the file already exists for now
-                            }
-                        }
+                        file_id = e.id();
                     }
                     None => {
                         reply.error(2); //no such file
@@ -257,6 +375,16 @@ impl Filesystem for GitFilesystem {
                 panic!(e);
             }
         };
+        new_tree_builder.remove(name).unwrap();// panic on error
+        match new_tree_builder.insert(newname,e.id(),e.filemode()) {
+            Ok(entry) => {
+                reply.ok();
+            }
+            Err(e) => {
+                println!("{}",e); // TODO: find what errors exist
+                reply.error(17); // lets just say that the file already exists for now
+            }
+        }
     }
     fn link(
         &mut self,
