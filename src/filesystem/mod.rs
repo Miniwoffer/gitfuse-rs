@@ -57,17 +57,17 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
             ttl : 10,
         }
     }
-    fn getTree(&mut self) -> TreeBuilder {
+    fn get_tree(&mut self) -> TreeBuilder {
         self.repository.treebuilder(Some(&self.repository.find_tree(self.new_tree).unwrap()) ).unwrap()
     }
-    fn setTree(&mut self, treebuilder : &TreeBuilder) {
+    fn set_tree(&mut self, treebuilder : &TreeBuilder) {
         //TODO: print the new oid to a file
         self.new_tree =  treebuilder.write().unwrap();
     }
 
-    fn getAttrs(&mut self, entry : TreeEntry) -> FileAttr {
+    fn get_attrs(&mut self, entry : TreeEntry) -> FileAttr {
         //TODO: find out what we can get from entry.filemode()
-        let mut fileAtr = FileAttr {
+        let mut file_attr = FileAttr {
             ino: 0,
             size: 0,
             blocks: 1,
@@ -87,12 +87,12 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
             Some(t) => {
                 match t {
                     Tree => {
-                        fileAtr.kind = FileType::Directory;
-                        fileAtr.size = 4096;
-                        fileAtr.nlink = 2;
+                        file_attr.kind = FileType::Directory;
+                        file_attr.size = 4096;
+                        file_attr.nlink = 2;
                     },
                     Blob => {
-                        fileAtr.size = entry.to_object(&self.repository).unwrap().as_blob().unwrap().content().len() as u64;
+                        file_attr.size = entry.to_object(&self.repository).unwrap().as_blob().unwrap().content().len() as u64;
                     },
                     _ => {
                         // Should only be a Tree or a Blob, but i guess we default to doing nothing
@@ -105,7 +105,7 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
                 panic!("No file type found")
             }
         };
-        fileAtr
+        file_attr
     }
 
     fn commit(&mut self) {
@@ -138,7 +138,7 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
                 let path = Path::new((p.to_string()+"/"+name.to_str().unwrap()).as_str());
                 match self.repository.find_tree( self.new_tree).unwrap().get_path(path) {
                     Ok(entry) => {
-                        let fileAtr = self.getAttrs(entry);
+                        let fileAtr = self.get_attrs(entry);
                         fileAtr.ino = self.inods.insert(path.to_str().unwrap());
                         reply.entry(
                             &(Timespec::new(0,0)+self.inods.ttl),
@@ -243,7 +243,7 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
         newname: &OsStr,
         reply: ReplyEmpty
     ) {
-        let mut new_tree_builder = self.getTree();
+        let mut new_tree_builder = self.get_tree();
         let mut file_id : Oid;
         match new_tree_builder.get(name) {
             Ok(a) => {
