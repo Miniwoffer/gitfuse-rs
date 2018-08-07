@@ -1,148 +1,34 @@
+mod inode;
+mod filesystem_entry;
+
 use git2::{Repository,Tree,Oid,ResetType,TreeBuilder,TreeEntry,Signature,Time,Blob};
 use fuse::*;
+
 
 use std::fs::File;
 use std::io::Write;
 use std::ffi::OsStr;
 use std::path::Path;
-use std::collections::VecDeque;
+
 
 use libc::c_int;
 use time::Timespec;
 use time::SteadyTime;
 use time::Duration;
 
+
 // GENERAL TODO list
 // Change strings to str with proper lifetimes
 //
 
 
-// TODO: Move inodeCollocion into a seperate mod
-pub struct InodeEntry<'entry> {
-    valid_until : SteadyTime,
-    path : &'entry str,
-}
-
-pub struct InodeCollection<'a> {
-    inodes : VecDeque<InodeEntry<'a>>,
-    inodeoffset : u64,
-    ttl : Duration,
-}
-impl<'a> InodeCollection<'a> {
-    fn new (ttl : Option<usize>) -> InodeCollection<'a> {
-        InodeCollection {
-            inodes : VecDeque::new(),
-            inodeoffset : 0u64,
-            ttl : match ttl {
-                Some(t) => Duration::seconds(t as i64),
-                None => Duration::seconds(2i64),
-            }
-        }
-    }
-    fn clean(&mut self) {
-        //removes all inodes that have expired
-        let cur_time = SteadyTime::now();
-        loop {
-            match self.inodes.front() {
-                Some(e) => if e.valid_until > cur_time {
-                    break;
-                },
-                None => break,
-            }
-            self.inodes.pop_front();
-            self.inodeoffset += 1;
-        }
-
-    }
-
-    fn insert(&mut self, path : &'a str) -> u64 {
-
-        self.inodes.push_back(InodeEntry {
-            path,
-            valid_until : SteadyTime::now()+self.ttl,
-        });
-        return self.inodeoffset + self.inodes.len() as u64;
-    }
-    fn remove(&mut self, inode : u64){
-        // do nothing since removing an element in the middle will break the list
-    }
-    fn get(&mut self, inode : u64) -> Option<&str> {
-        self.clean();
-        match self.inodes.get((inode-self.inodeoffset) as usize) {
-            Some(e) => Some(e.path),
-            None => None,
-        }
-    }
-}
-
-pub struct FilesystemEntry<'a> {
-    name : &'a str,
-    original : boolean,
-    file_type : FileType,
-    oid : Option<Oid>,
-    children : Vec<FilesystemEntry<'a>>,
-}
-pub enum Filetype {
-    folder,
-    file,
-}
-impl<'a> FilesystemEntry<'a> {
-    pub fn new(file_type : FileType) -> FilesystemEntry<'a> {
-        FilesystemEntry{
-            original: false,
-            file_type,
-            oid : None,
-            children : Vec::new(),
-
-        }
-    }
-    pub fn fromTree(tree : &Tree, repo : &Repository, name : &'a str) -> FilesystemEntry<'a> {
-        let mut children  = Vec::new();
-        for entry in tree {
-            children.push(File::fromEntry(entry,repo));
-        }
-        FilesystemEntry{
-            name,
-            original: true,
-            file_type : FileType::folder,
-            oid : tree.id,
-            children,
-
-        }
-    }
-    pub fn fromTreeEntry( treeEntry : &TreeEntry, repo : &Repository) -> FilesystemEntry<'a> {
-        match treeEntry.kind() {
-            Some(t) => {
-                match t {
-                    Tree => {
-                        FilesystemEntry::fromTree(treeEntry.to_object(repo).unwrap().into_tree().unwrap(),
-                                                  treeEntry.name().unwrap());
-                    },
-                    _ => {
-                        FilesystemEntry{
-                            name : treeEntry.name().unwrap(),
-                            original: true,
-                            file_type : FileType::file,
-                            oid : treeEntry.id().unwrap(),
-                            children : Vec::new(),
-                        }
-
-                    }
-                }
-            }
-            None => {
-                panic!("No file type found")
-            }
-        };
-    }
-}
 
 pub struct GitFilesystem<'collection,'a>{
     repository : Repository,
     new_tree : Oid,
     commit_time : Timespec,
     referance : &'collection str,
-    inods : InodeCollection<'a>,
+    inods : inode::InodeCollection<'a>,
     ttl : usize,
 }
 impl<'collection,'a> GitFilesystem<'collection,'a> {
@@ -167,7 +53,7 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
             new_tree,
             commit_time,
             referance,
-            inods : InodeCollection::new(Some(10)),
+            inods : inode::InodeCollection::new(Some(10)),
             ttl : 10,
         }
     }
