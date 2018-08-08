@@ -10,7 +10,7 @@ pub struct InodeEntry<'entry> {
 pub struct InodeCollection<'a> {
     inodes : VecDeque<InodeEntry<'a>>,
     inodeoffset : u64,
-    ttl : Duration,
+    pub ttl : Duration,
 }
 impl<'a> InodeCollection<'a> {
     pub fn new (ttl : Option<usize>) -> InodeCollection<'a> {
@@ -23,7 +23,7 @@ impl<'a> InodeCollection<'a> {
             }
         }
     }
-    fn clean(&mut self) {
+    pub fn clean(&mut self) {
         //removes all inodes that have expired
         let cur_time = SteadyTime::now();
         loop {
@@ -50,8 +50,7 @@ impl<'a> InodeCollection<'a> {
     pub fn remove(&mut self, inode : u64){
         // do nothing since removing an element in the middle will break the list
     }
-    pub fn get(&mut self, inode : u64) -> Option<&str> {
-        self.clean();
+    pub fn get(&self, inode : u64) -> Option<&str> {
         match self.inodes.get((inode-self.inodeoffset) as usize) {
             Some(e) => Some(e.path),
             None => None,

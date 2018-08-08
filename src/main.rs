@@ -8,9 +8,6 @@ extern crate time;
 mod filesystem;
 
 use std::path::Path;
-use std::ffi::OsStr;
-
-use git2::Repository;
 
 fn main() {
 

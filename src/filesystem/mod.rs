@@ -1,35 +1,28 @@
 mod inode;
 mod filesystem_entry;
+pub mod error_codes;
 
-use git2::{Repository,Tree,Oid,ResetType,TreeBuilder,TreeEntry,Signature,Time,Blob};
+use git2::{Repository,Oid,Signature};
 use fuse::*;
 
-
-use std::fs::File;
 use std::io::Write;
 use std::ffi::OsStr;
 use std::path::Path;
 
 
-use libc::c_int;
+use std::os::raw::c_int;
 use time::Timespec;
-use time::SteadyTime;
-use time::Duration;
 
+// TODO: Check all error codes
 
-// GENERAL TODO list
-// Change strings to str with proper lifetimes
-//
-
-
-
-pub struct GitFilesystem<'collection,'a>{
+pub struct GitFilesystem<'collection,'a> {
     repository : Repository,
     new_tree : Oid,
     commit_time : Timespec,
     referance : &'collection str,
     inods : inode::InodeCollection<'a>,
-    ttl : usize,
+    files : filesystem_entry::FilesystemEntry,
+    ttl : i64,
 }
 impl<'collection,'a> GitFilesystem<'collection,'a> {
     pub fn new (repo_path : &str,referance : &'collection str) -> GitFilesystem<'collection,'a> {
@@ -37,16 +30,21 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
             Ok(repo) => repo,
             Err(e) => panic!("failed to open: {}", e),
         };
+        let mut commit_time;
+        let mut new_tree;
+        let mut files;
+        {
+            //TODO: might want to use as_commit() instead of peel_to_commit
+            let curr_commit = repository.revparse_single(referance).unwrap().peel_to_commit().unwrap();
+            let curr_tree = curr_commit.tree().unwrap();
+            files = filesystem_entry::FilesystemEntry::from_tree(&curr_tree,&repository,"root".to_string());
 
-        //TODO: might want to use as_commit() instead of peel_to_commit
-        let curr_commit = repository.revparse_single(referance).unwrap().peel_to_commit().unwrap();
-        let curr_tree = curr_commit.tree().unwrap();
+            //Writes a copy of the current tree to git and saves the Oid, this is to hinder the original tree from getting deleted.
+            new_tree = repository.treebuilder(Some(&curr_tree)).unwrap().write().unwrap();
 
-        //Writes a copy of the current tree to git and saves the Oid, this is to hinder the original tree from getting deleted.
-        let new_tree = repository.treebuilder(Some(&curr_tree)).unwrap().write().unwrap();
-
-        //commit do not have nano seconds so sett it to 0
-        let commit_time = Timespec::new(curr_commit.time().seconds(), 0);
+            //commit do not have nano seconds so sett it to 0
+            commit_time = Timespec::new(curr_commit.time().seconds(), 0);
+        }
 
         GitFilesystem {
             repository,
@@ -55,17 +53,11 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
             referance,
             inods : inode::InodeCollection::new(Some(10)),
             ttl : 10,
+            files,
         }
     }
-    fn get_tree(&mut self) -> TreeBuilder {
-        self.repository.treebuilder(Some(&self.repository.find_tree(self.new_tree).unwrap()) ).unwrap()
-    }
-    fn set_tree(&mut self, treebuilder : &TreeBuilder) {
-        //TODO: print the new oid to a file
-        self.new_tree =  treebuilder.write().unwrap();
-    }
 
-    fn get_attrs(&mut self, entry : TreeEntry) -> FileAttr {
+    fn get_attrs(&self, entry : &filesystem_entry::FilesystemEntry) -> FileAttr {
         //TODO: find out what we can get from entry.filemode()
         let mut file_attr = FileAttr {
             ino: 0,
@@ -83,26 +75,14 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
             flags: 0,
             crtime: self.commit_time, // TODO: Get repository creation time maybe?
         };
-        match entry.kind() {
-            Some(t) => {
-                match t {
-                    Tree => {
-                        file_attr.kind = FileType::Directory;
-                        file_attr.size = 4096;
-                        file_attr.nlink = 2;
-                    },
-                    Blob => {
-                        file_attr.size = entry.to_object(&self.repository).unwrap().as_blob().unwrap().content().len() as u64;
-                    },
-                    _ => {
-                        // Should only be a Tree or a Blob, but i guess we default to doing nothing
-                        // TODO : might want to panic here, since there shouldn't be a commit,tag or any in here.
-
-                    }
-                }
-            }
-            None => {
-                panic!("No file type found")
+        match entry.file_type {
+            filesystem_entry::EntryFiletype::folder => {
+                file_attr.kind = FileType::Directory;
+                file_attr.size = 4096;
+                file_attr.nlink = 2;
+            },
+            filesystem_entry::EntryFiletype::file => {
+                file_attr.size = entry.size;
             }
         };
         file_attr
@@ -133,35 +113,46 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
         self.commit();
     }
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        match self.inods.get(parent) {
-            Some(p) => {
-                let path = Path::new((p.to_string()+"/"+name.to_str().unwrap()).as_str());
-                match self.repository.find_tree( self.new_tree).unwrap().get_path(path) {
-                    Ok(entry) => {
-                        let fileAtr = self.get_attrs(entry);
-                        fileAtr.ino = self.inods.insert(path.to_str().unwrap());
-                        reply.entry(
-                            &(Timespec::new(0,0)+self.inods.ttl),
-                            & fileAtr,
-                            0);
-                    }
-                    Err(e) => {
-                        //TODO: Check if the error is "not found"
-                        reply.error(2);
-                    }
+        let path = match self.inods.get(parent) {
+                Some(e) => e.to_string() + name.to_str().unwrap(),
+                None => {
+                    reply.error(error_codes::EBADF);
+                    return
+                },
+            };
+        let file = match self.files.get_path(path.as_str()) {
+                Some(e) => e,
+                None => {
+                    reply.error(error_codes::ENOENT);
+                    return;
                 }
-            },
-            None => {
-                reply.error(2);
-            },
-        }
+            };
+        let ttl = Timespec::new(self.ttl,0);
+        let file_attr = self.get_attrs(file);
+        reply.entry(&ttl,&file_attr, 0); // TODO: What does generation do?
+
     }
     fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {
-        //Do nothing, we never forget a ino
+        //Do nothing, we never forget a ino. It would break collection
     }
-    fn getattr(&mut self, _req: &Request, _ino: u64, reply: ReplyAttr) {
-
-
+    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+        let path = match self.inods.get(ino) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::EBADF);
+                return
+            },
+        };
+        let file = match self.files.get_path(path) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        let ttl = Timespec::new(self.ttl,0);
+        let file_attr = self.get_attrs(file);
+        reply.attr(&ttl,&file_attr);
     }
     fn setattr(
         &mut self,
@@ -197,14 +188,43 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
     fn mkdir(
         &mut self,
         _req: &Request,
-        _parent: u64,
-        _name: &OsStr,
+        parent: u64,
+        name: &OsStr,
         _mode: u32,
         reply: ReplyEntry
     ) {
-        //cant create a empty dir, so make a dummy file.
-
-
+        let name = match name.to_str() {
+            Some(s) => s.to_string(),
+            None => {
+                reply.error(error_codes::EPERM); // TODO: invalid name error??
+                return
+            },
+        };
+        let new_file = filesystem_entry::FilesystemEntry::new(filesystem_entry::EntryFiletype::folder, name);
+        let file_attr = self.get_attrs(&new_file);
+        let path = match self.inods.get(parent) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::EBADF);
+                return
+            },
+        };
+        let file = match self.files.get_path_mut(path) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        match file.add(new_file) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::EEXIST);
+                return
+            },
+        };
+        let ttl = Timespec::new(self.ttl,0);
+        reply.entry(&ttl,&file_attr,0);
     }
     fn unlink(
         &mut self,
@@ -218,10 +238,35 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
     fn rmdir(
         &mut self,
         _req: &Request,
-        _parent: u64,
-        _name: &OsStr,
+        parent: u64,
+        name: &OsStr,
         reply: ReplyEmpty
     ) {
+        let name = match name.to_str() {
+            Some(s) => s,
+            None => {
+                reply.error(error_codes::EPERM); // TODO: invalid name error??
+                return
+            },
+        };
+        let path = match self.inods.get(parent) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::EBADF);
+                return
+            },
+        };
+        let file = match self.files.get_path_mut(path) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        match file.remove(name, filesystem_entry::EntryFiletype::folder) {
+            Ok(_) => reply.ok(),
+            Err(e) => reply.error(e),
+        };
 
     }
     fn symlink(
@@ -237,40 +282,28 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
     fn rename(
         &mut self,
         _req: &Request,
-        _parent: u64,
+        parent: u64,
         name: &OsStr,
-        _newparent: u64,
+        newparent: u64,
         newname: &OsStr,
         reply: ReplyEmpty
-    ) {
-        let mut new_tree_builder = self.get_tree();
-        let mut file_id : Oid;
-        match new_tree_builder.get(name) {
-            Ok(a) => {
-                match a {
-                    Some(e) => {
-                        file_id = e.id();
-                    }
-                    None => {
-                        reply.error(2); //no such file
-                    }
-                }
-
-            }
-            Err(e) => {
-                panic!(e);
-            }
+    ){
+        self.inods.clean();
+        let old_dir = match self.inods.get(parent) {
+                Some(e) => e,
+                None => {
+                    reply.error(2);
+                    return
+                },
+            };
+        let new_dir = match self.inods.get(newparent) {
+            Some(e) => e,
+            None => {
+                reply.error(2);
+                return
+            },
         };
-        new_tree_builder.remove(name).unwrap();// panic on error
-        match new_tree_builder.insert(newname,e.id(),e.filemode()) {
-            Ok(entry) => {
-                reply.ok();
-            }
-            Err(e) => {
-                println!("{}",e); // TODO: find what errors exist
-                reply.error(17); // lets just say that the file already exists for now
-            }
-        }
+
     }
     fn link(
         &mut self,
