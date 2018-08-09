@@ -1,8 +1,13 @@
-Skal hest være asyncront/multitheraded.
-Rust er opp til meg.
-Se etter lettetst mulig måte a finne endringe på disk.
-Samle endringer i en heap, commite etter en gitt tid/antall endringer.
-Gitfs sit fs er sjeff/force commit alle endringer.
+Install cargo with your distro's package manager
+or
+Use rustup
+```
+curl https://sh.rustup.rs -sSf | sh
+```
 
 
-.git-fuse inne i mapper for å hindre sletting.
+
+Navigate to git dir and run
+```
+cargo run
+```
