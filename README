@@ -5,7 +5,7 @@ Use rustup
 curl https://sh.rustup.rs -sSf | sh
 ```
 
-
+Install git and fuse
 
 Navigate to git dir and run
 ```
