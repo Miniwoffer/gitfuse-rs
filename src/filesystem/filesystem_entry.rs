@@ -180,7 +180,6 @@ impl FilesystemEntry {
                 }
         }
     }
-    pub fn to_tree(&self, repo :&Repository) -> Option<Tree> {
-        None
+    pub fn to_git_object(&self, repo :&Repository) {
     }
 }

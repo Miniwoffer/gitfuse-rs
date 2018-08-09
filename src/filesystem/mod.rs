@@ -297,4 +297,19 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
 
         }
     }
+    fn open(&mut self, _req: &Request, _ino: u64, _flags: u32, reply: ReplyOpen) {
+
+    }
+    fn write(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        data: &[u8],
+        _flags: u32,
+        reply: ReplyWrite
+    ) {
+
+    }
 }
