@@ -7,7 +7,7 @@ curl https://sh.rustup.rs -sSf | sh
 
 Install git and fuse
 
-Navigate to git dir and run
+Navigate git_fue_rs dir and run
 ```
 cargo run
 ```
