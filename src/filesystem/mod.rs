@@ -259,4 +259,42 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         }
         reply.ok();
     }
+    fn read(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        size: u32,
+        reply: ReplyData
+    ) {
+        let path = &self.inods[ino as usize];
+        let oid = match self.files.get_path(path.as_str()) {
+            Some(e) => match e.oid {
+                Some(e) => e,
+                None => {
+                    reply.error(error_codes::ENOENT);
+                    return;
+                }
+            },
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        match self.repository.find_blob(oid) {
+            Ok(blob) => {
+                let (_,content) = blob.content().split_at(offset as usize);
+                if content.len() >= size as usize {
+                    let (content, _) = content.split_at(size as usize);
+                }
+                reply.data(content);
+
+            }
+            Err(e) => {
+                reply.error(error_codes::ENOENT);
+            }
+
+        }
+    }
 }

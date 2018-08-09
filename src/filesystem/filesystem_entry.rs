@@ -180,4 +180,7 @@ impl FilesystemEntry {
                 }
         }
     }
+    pub fn to_tree(&self, repo :&Repository) -> Option<Tree> {
+        None
+    }
 }
