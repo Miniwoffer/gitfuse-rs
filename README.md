@@ -11,7 +11,7 @@ Navigate git_fue_rs dir and run
 ```
 cargo run
 ```
-**USAGE
+USAGE
 ```
 git filesystem 0.1.0
 
