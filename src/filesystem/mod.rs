@@ -1,4 +1,3 @@
-mod inode;
 mod filesystem_entry;
 pub mod error_codes;
 
@@ -15,17 +14,17 @@ use time::Timespec;
 
 // TODO: Check all error codes
 
-pub struct GitFilesystem<'collection,'a> {
+pub struct GitFilesystem<'collection> {
     repository : Repository,
     new_tree : Oid,
     commit_time : Timespec,
     referance : &'collection str,
-    inods : inode::InodeCollection<'a>,
+    inods : Vec<String>,
     files : filesystem_entry::FilesystemEntry,
     ttl : i64,
 }
-impl<'collection,'a> GitFilesystem<'collection,'a> {
-    pub fn new (repo_path : &str,referance : &'collection str) -> GitFilesystem<'collection,'a> {
+impl<'collection> GitFilesystem<'collection> {
+    pub fn new (repo_path : &str,referance : &'collection str) -> GitFilesystem<'collection> {
         let mut repository = match Repository::open(repo_path) {
             Ok(repo) => repo,
             Err(e) => panic!("failed to open: {}", e),
@@ -33,11 +32,15 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
         let mut commit_time;
         let mut new_tree;
         let mut files;
+        let mut inods = Vec::new();
         {
             //TODO: might want to use as_commit() instead of peel_to_commit
             let curr_commit = repository.revparse_single(referance).unwrap().peel_to_commit().unwrap();
             let curr_tree = curr_commit.tree().unwrap();
-            files = filesystem_entry::FilesystemEntry::from_tree(&curr_tree,&repository,"root".to_string());
+            inods.push("".to_string());
+            inods.push("".to_string());//filesys inode starts at 1, this is faster then to add and sub everytime.
+
+            files = filesystem_entry::FilesystemEntry::from_tree(&curr_tree,&repository,"".to_string(),"".to_string(),&mut inods);
 
             //Writes a copy of the current tree to git and saves the Oid, this is to hinder the original tree from getting deleted.
             new_tree = repository.treebuilder(Some(&curr_tree)).unwrap().write().unwrap();
@@ -51,7 +54,7 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
             new_tree,
             commit_time,
             referance,
-            inods : inode::InodeCollection::new(Some(10)),
+            inods,
             ttl : 10,
             files,
         }
@@ -60,13 +63,13 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
     fn get_attrs(&self, entry : &filesystem_entry::FilesystemEntry) -> FileAttr {
         //TODO: find out what we can get from entry.filemode()
         let mut file_attr = FileAttr {
-            ino: 0,
+            ino: entry.ino as u64,
             size: 0,
             blocks: 1,
             atime: self.commit_time,
             mtime: self.commit_time,
             ctime: self.commit_time,
-            kind:  FileType::RegularFile,
+            kind:  entry.file_type,
             perm: 0,
             nlink: 1,
             uid: 0,
@@ -76,14 +79,14 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
             crtime: self.commit_time, // TODO: Get repository creation time maybe?
         };
         match entry.file_type {
-            filesystem_entry::EntryFiletype::folder => {
-                file_attr.kind = FileType::Directory;
+            FileType::Directory => {
                 file_attr.size = 4096;
                 file_attr.nlink = 2;
             },
-            filesystem_entry::EntryFiletype::file => {
+            FileType::RegularFile => {
                 file_attr.size = entry.size;
             }
+            _ => {},
         };
         file_attr
     }
@@ -103,7 +106,7 @@ impl<'collection,'a> GitFilesystem<'collection,'a> {
     }
 }
 
-impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
+impl<'collection> Filesystem for GitFilesystem<'collection> {
 
     fn init(&mut self, _req: &Request) -> Result<(), c_int> {
         //we construct elsewhere
@@ -113,37 +116,29 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
         self.commit();
     }
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let path = match self.inods.get(parent) {
-                Some(e) => e.to_string() + name.to_str().unwrap(),
-                None => {
-                    reply.error(error_codes::EBADF);
-                    return
-                },
-            };
+        let mut path = self.inods[parent as usize].clone();
+        if !path.is_empty(){
+            path = path + "/";
+        }
+        path = path + name.to_str().unwrap();
+        println!("lookup:{}",path);
         let file = match self.files.get_path(path.as_str()) {
                 Some(e) => e,
                 None => {
                     reply.error(error_codes::ENOENT);
                     return;
                 }
-            };
+        };
+        println!("lookup found {} = {}",path,file.name);
         let ttl = Timespec::new(self.ttl,0);
         let file_attr = self.get_attrs(file);
         reply.entry(&ttl,&file_attr, 0); // TODO: What does generation do?
 
     }
-    fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {
-        //Do nothing, we never forget a ino. It would break collection
-    }
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        let path = match self.inods.get(ino) {
-            Some(e) => e,
-            None => {
-                reply.error(error_codes::EBADF);
-                return
-            },
-        };
-        let file = match self.files.get_path(path) {
+        let path = &self.inods[ino as usize];
+        println!("getattr:{}",path);
+        let file = match self.files.get_path(path.as_str()) {
             Some(e) => e,
             None => {
                 reply.error(error_codes::ENOENT);
@@ -154,37 +149,6 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
         let file_attr = self.get_attrs(file);
         reply.attr(&ttl,&file_attr);
     }
-    fn setattr(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _mode: Option<u32>,
-        _uid: Option<u32>,
-        _gid: Option<u32>,
-        _size: Option<u64>,
-        _atime: Option<Timespec>,
-        _mtime: Option<Timespec>,
-        _fh: Option<u64>, _crtime: Option<Timespec>,
-        _chgtime: Option<Timespec>,
-        _bkuptime: Option<Timespec>, _flags: Option<u32>,
-        reply: ReplyAttr) {
-        //do nothing unless we can sett the repository's head, so we can access the index
-    }
-    fn readlink(&mut self, _req: &Request, _ino: u64, reply: ReplyData) {
-
-    }
-    fn mknod(
-        &mut self,
-        _req: &Request,
-        _parent: u64,
-        _name: &OsStr,
-        _mode: u32,
-        _rdev: u32,
-        reply: ReplyEntry
-    ) {
-
-
-    }
     fn mkdir(
         &mut self,
         _req: &Request,
@@ -193,6 +157,7 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
         _mode: u32,
         reply: ReplyEntry
     ) {
+        let path = self.inods[parent as usize].clone();
         let name = match name.to_str() {
             Some(s) => s.to_string(),
             None => {
@@ -200,16 +165,12 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
                 return
             },
         };
-        let new_file = filesystem_entry::FilesystemEntry::new(filesystem_entry::EntryFiletype::folder, name);
+        let new_file = filesystem_entry::FilesystemEntry::new(FileType::Directory,
+                                                              name,
+                                                              path.to_string(),
+                                                              &mut self.inods);
         let file_attr = self.get_attrs(&new_file);
-        let path = match self.inods.get(parent) {
-            Some(e) => e,
-            None => {
-                reply.error(error_codes::EBADF);
-                return
-            },
-        };
-        let file = match self.files.get_path_mut(path) {
+        let file = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
             None => {
                 reply.error(error_codes::ENOENT);
@@ -226,15 +187,6 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
         let ttl = Timespec::new(self.ttl,0);
         reply.entry(&ttl,&file_attr,0);
     }
-    fn unlink(
-        &mut self,
-        _req: &Request,
-        _parent: u64,
-        _name: &OsStr,
-        reply: ReplyEmpty
-    ) {
-        // git does not support links.
-    }
     fn rmdir(
         &mut self,
         _req: &Request,
@@ -249,35 +201,19 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
                 return
             },
         };
-        let path = match self.inods.get(parent) {
-            Some(e) => e,
-            None => {
-                reply.error(error_codes::EBADF);
-                return
-            },
-        };
-        let file = match self.files.get_path_mut(path) {
+        let path = self.inods[parent as usize].clone();
+        let file = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
             None => {
                 reply.error(error_codes::ENOENT);
                 return;
             }
         };
-        match file.remove(name, filesystem_entry::EntryFiletype::folder) {
+        match file.remove(name, FileType::Directory,&mut self.inods) {
             Ok(_) => reply.ok(),
             Err(e) => reply.error(e),
         };
 
-    }
-    fn symlink(
-        &mut self,
-        _req: &Request,
-        _parent: u64,
-        _name: &OsStr,
-        _link: &Path,
-        reply: ReplyEntry
-    ) {
-        // git does not support links.
     }
     fn rename(
         &mut self,
@@ -288,196 +224,39 @@ impl<'collection,'a> Filesystem for GitFilesystem<'collection,'a> {
         newname: &OsStr,
         reply: ReplyEmpty
     ){
-        self.inods.clean();
-        let old_dir = match self.inods.get(parent) {
-                Some(e) => e,
-                None => {
-                    reply.error(2);
-                    return
-                },
-            };
-        let new_dir = match self.inods.get(newparent) {
-            Some(e) => e,
-            None => {
-                reply.error(2);
-                return
-            },
-        };
+        let old_dir = self.inods[parent as usize].clone();
+        let new_dir = self.inods[newparent as usize].clone();
 
     }
-    fn link(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _newparent: u64,
-        _newname: &OsStr,
-        reply: ReplyEntry
-    ) {
-        // git does not support links.
-    }
-    fn open(&mut self, _req: &Request, _ino: u64, _flags: u32, reply: ReplyOpen) {
-
-    }
-    fn read(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        _size: u32,
-        reply: ReplyData
-    ) {
-
-    }
-    fn write(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        _data: &[u8],
-        _flags: u32,
-        reply: ReplyWrite
-    ) {
-
-    }
-    fn flush(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
-        reply: ReplyEmpty
-    ) {  }
-    fn release(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _flags: u32,
-        _lock_owner: u64,
-        _flush: bool,
-        reply: ReplyEmpty
-    ) {  }
-    fn fsync(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _datasync: bool,
-        reply: ReplyEmpty
-    ) {  }
-    fn opendir(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _flags: u32,
-        reply: ReplyOpen
-    ) {  }
     fn readdir(
         &mut self,
         _req: &Request,
-        _ino: u64,
+        ino: u64,
         _fh: u64,
-        _offset: i64,
-        reply: ReplyDirectory
-    ) {  }
-    fn releasedir(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _flags: u32,
-        reply: ReplyEmpty
-    ) {  }
-    fn fsyncdir(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _datasync: bool,
-        reply: ReplyEmpty
-    ) {  }
-    fn statfs(&mut self, _req: &Request, _ino: u64, reply: ReplyStatfs) {  }
-    fn setxattr(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _name: &OsStr,
-        _value: &[u8],
-        _flags: u32,
-        _position: u32,
-        reply: ReplyEmpty
-    ) {  }
-    fn getxattr(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _name: &OsStr,
-        _size: u32,
-        reply: ReplyXattr
-    ) {  }
-    fn listxattr(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _size: u32,
-        reply: ReplyXattr
-    ) {  }
-    fn removexattr(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _name: &OsStr,
-        reply: ReplyEmpty
-    ) {  }
-    fn access(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _mask: u32,
-        reply: ReplyEmpty
-    ) {  }
-    fn create(
-        &mut self,
-        _req: &Request,
-        _parent: u64,
-        _name: &OsStr,
-        _mode: u32,
-        _flags: u32,
-        reply: ReplyCreate
-    ) {  }
-    fn getlk(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
-        _start: u64,
-        _end: u64,
-        _typ: u32,
-        _pid: u32,
-        reply: ReplyLock
-    ) {  }
-    fn setlk(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
-        _start: u64,
-        _end: u64,
-        _typ: u32,
-        _pid: u32,
-        _sleep: bool,
-        reply: ReplyEmpty
-    ) {  }
-    fn bmap(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _blocksize: u32,
-        _idx: u64,
-        reply: ReplyBmap
-    ) {  }
+        offset: i64,
+        mut reply: ReplyDirectory
+    ) {
+        let path = &self.inods[ino as usize];
+        println!("readdir:{}",path);
+        let folder = match self.files.get_path(path.as_str()) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        println!("dir:{}",folder.name);
+        if offset == 0 {
+            reply.add(ino, 0, FileType::Directory, ".");
+            reply.add(ino, 1, FileType::Directory, "..");
+        }
+        for index in (offset as usize)..folder.children.len() {
+            let file = &folder.children[index];
+            let file_type = file.file_type;
+            let file_name = file.name.clone();
+            let fileatr = file.ino as u64;
+            reply.add(fileatr ,(index+2) as i64,file_type,file_name);
+        }
+        reply.ok();
+    }
 }

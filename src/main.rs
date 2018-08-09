@@ -12,7 +12,7 @@ use std::path::Path;
 fn main() {
 
 
-    let filesys = filesystem::GitFilesystem::new("test_repository","TEST");
+    let filesys = filesystem::GitFilesystem::new("test_repository","HEAD");
     let path = Path::new("./test_filesystem");
     fuse::mount(filesys,&path,&[]).unwrap();
 }

@@ -3,28 +3,26 @@ use std::str::Split;
 use std::os::raw::c_int;
 use filesystem::error_codes;
 
+use fuse::FileType;
 #[derive(PartialEq)]
 pub struct FilesystemEntry {
     pub name : String,
-    pub file_type : EntryFiletype,
+    pub file_type : FileType,
     pub oid : Option<Oid>,
+    pub ino : usize,
     pub children : Vec<FilesystemEntry>,
     pub size : u64,
 }
-#[derive(PartialEq)]
-pub enum EntryFiletype {
-    folder,
-    file,
-}
 impl FilesystemEntry {
-    pub fn new(file_type : EntryFiletype, name : String) -> FilesystemEntry {
+    pub fn new(file_type : FileType, name : String, path : String, inodes : &mut Vec<String>) -> FilesystemEntry {
+        inodes.push(path+"/"+name.as_str());
         FilesystemEntry{
             name,
             file_type,
             oid : None,
+            ino : inodes.len()-1,
             children : Vec::new(),
             size : 0u64,
-
         }
     }
     pub fn add(&mut self, file : FilesystemEntry) -> Option<&FilesystemEntry>{
@@ -35,7 +33,7 @@ impl FilesystemEntry {
         self.children.push(file);
         Some(self.children.last().unwrap())
     }
-    pub fn remove(&mut self, name : &str, file_type : EntryFiletype) -> Result<(),c_int> {
+    pub fn remove(&mut self, name : &str, file_type : FileType, inodes : &mut Vec<String>) -> Result<(),c_int> {
         let mut index = None;
         for i in 0..self.children.len() {
             if self.children[i].name == name {
@@ -47,6 +45,7 @@ impl FilesystemEntry {
             None => return Err(error_codes::ENOENT),
         };
         if self.children[index].file_type == file_type {
+            inodes.remove(self.children[index].ino);
             self.children.remove(index);
             return Ok(());
         } else {
@@ -55,30 +54,35 @@ impl FilesystemEntry {
 
     }
     pub fn get_path(&self , path : &str ) -> Option<&FilesystemEntry> {
-        let path = path.to_owned();
-        let names = path.split('/');
-        let mut ret = self;
-        for name in names {
-            ret = match ret.index(name) {
-                Some(t) => t,
-                None => return None,
-            }
+        let mut path = path.to_owned();
+        if path.is_empty() {
+            return Some(self);
         }
+        let (name, rest) = match path.find('/'){
+            Some(s) => {
+                let (n,a) = path.split_at(s);
+                let (_,a) = a.split_at(1);
+                (n,a)
+            },
+            None => (path.as_str(),""),
+        };
+        //let (name,rest) = path.split_at(split);
+        //let (_,rest) = rest.split_at(1);
+        println!("Split {}:{}",name,rest);
+        let ret = match self.index(name) {
+            Some(s) => match s.get_path(rest) {
+                Some(s) => s,
+                None => return None,
+            },
+            None => return None,
+        };
         Some(ret)
-
     }
     pub fn get_path_mut(&mut self , path : &str ) -> Option<&mut FilesystemEntry> {
         let mut path = path.to_owned();
         let split = match path.find('/'){
             Some(s) => s,
             None => return Some(self),
-        };
-        if split == 0 {
-            path.remove(0);
-            let split = match path.find('/'){
-                Some(s) => s,
-                None => return Some(self),
-            };
         };
         let (name,rest) = path.split_at(split);
 
@@ -110,54 +114,70 @@ impl FilesystemEntry {
         }
         None
     }
-    pub fn from_tree(tree : &Tree, repo : &Repository, name : String) -> FilesystemEntry {
+    pub fn from_tree(tree : &Tree, repo : &Repository, name : String, mut path : String, inodes : &mut Vec<String>) -> FilesystemEntry {
         let mut children  = Vec::new();
-        for entry in tree {
-            children.push(FilesystemEntry::from_tree_entry(&entry,repo));
+        if !path.is_empty() {
+            path = path + "/";
         }
+        for entry in tree {
+            children.push(FilesystemEntry::from_tree_entry(&entry,repo,path.clone()+name.as_str(),inodes));
+        }
+
+        inodes.push(path.clone() + name.as_str());
+        println!("Folder:{}",path+name.as_str());
         FilesystemEntry{
             name,
-            file_type : EntryFiletype::folder,
+            file_type : FileType::Directory,
             oid : Some(tree.id()),
+            ino : inodes.len()-1,
             children,
             size : 0u64,
 
         }
     }
-    pub fn from_tree_entry(treeEntry : &TreeEntry, repo : &Repository) -> FilesystemEntry {
+    pub fn from_tree_entry(treeEntry : &TreeEntry, repo : &Repository, path:String, inodes : &mut Vec<String>) -> FilesystemEntry {
         let name : String = treeEntry.name().unwrap().to_owned();
         let treeEntry = treeEntry.to_object(repo).unwrap();
-        match treeEntry.kind() {
-            Some(t) => {
-                match t {
-                    Tree => {
-                        match treeEntry.as_tree() {
-                            Some(t) =>  FilesystemEntry::from_tree(t,repo,name),
-                            None => //empty tree?
-                                FilesystemEntry{
-                                name,
-                                file_type : EntryFiletype::folder,
-                                oid : Some(treeEntry.id()),
-                                children : Vec::new(),
-                                size : 0,
-                            },
-                        }
-                    },
-                    Blob => {
-                        let size = treeEntry.as_blob().unwrap().content().len() as u64;
-                        FilesystemEntry{
-                            name,
-                            file_type : EntryFiletype::file,
-                            oid : Some(treeEntry.id()),
-                            children : Vec::new(),
-                            size,
-                        }
+        let mut full_path = path.clone();
+        if !full_path.is_empty(){
+            full_path = full_path + "/";
+        }
+        full_path = full_path + name.as_str();
+
+        let oid = treeEntry.id();
+
+        match treeEntry.clone().into_blob() {
+            Ok(f) => {
+                println!("File:{}",full_path);
+                let size = f.content().len() as u64;
+                inodes.push(full_path);
+                return FilesystemEntry {
+                    name,
+                    file_type : FileType::RegularFile,
+                    oid : Some(oid),
+                    ino: inodes.len() - 1,
+                    children : Vec::new(),
+                    size,
+                }
+
+            },
+            Err(e) => {},
+        };
+        match treeEntry.as_tree() {
+            Some(t) =>  FilesystemEntry::from_tree(t,repo,name,path,inodes),
+            None => //empty tree?
+                {
+                    println!("Folder:{}",full_path);
+                    inodes.push(full_path);
+                    FilesystemEntry {
+                        name,
+                        file_type: FileType::Directory,
+                        oid: Some(oid),
+                        ino: inodes.len() - 1,
+                        children: Vec::new(),
+                        size: 0,
                     }
                 }
-            }
-            None => {
-                panic!("No file type found");
-            }
         }
     }
 }
