@@ -42,7 +42,7 @@ impl<'collection> GitFilesystem<'collection> {
             inods.push("".to_string());
             inods.push("".to_string());//filesys inode starts at 1, this is faster then to add and sub everytime.
 
-            files = filesystem_entry::FilesystemEntry::from_tree(&curr_tree,&repository,"".to_string(),"".to_string(),&mut inods);
+            files = filesystem_entry::FilesystemEntry::from_tree(&curr_tree,&repository,"".to_string(),"".to_string(),&mut inods,0);
 
             //Writes a copy of the current tree to git and saves the Oid, this is to hinder the original tree from getting deleted.
             new_tree = repository.treebuilder(Some(&curr_tree)).unwrap().write().unwrap();
@@ -94,9 +94,15 @@ impl<'collection> GitFilesystem<'collection> {
     }
 
     fn commit(&mut self) {
+        let new_tree = match self.files.to_git_object(&mut self.repository) {
+            Some(nt) => nt,
+            None => panic!("Failed to commit."),
+        };
+        let tree = self.repository.find_tree(new_tree).unwrap();
+
         let last_commit = self.repository.revparse_single(self.referance).unwrap().peel_to_commit().unwrap();
-        let tree = self.repository.find_tree(self.new_tree).unwrap();
         let sign = Signature::now("git-fs","").unwrap();
+
 
         //TODO: Do we update the ref? if not we need to find another way to get "last_commit"
         self.repository.commit(Some(self.referance),
@@ -349,16 +355,24 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         };
 
         //Write
-        if flags & access_codes::O_ACCMODE && !entry.write {
+        if flags & access_codes::O_ACCMODE > 0 && !entry.write {
             let content = match entry.oid {
                 Some(oid) => {
+                    match self.repository.find_blob(oid) {
+                        Ok(blob) => {
+                            blob.content().to_owned()
+                        }
+                        Err(e) => {
+                            Vec::new()
+                        }
 
+                    }
                 },
                 None => {
-                    return [0u8];
+                    Vec::new()
                 }
-            }
-            if flags & access_codes::O_TRUNC {
+            };
+            if flags & access_codes::O_TRUNC > 0 {
 
             }
 

@@ -16,9 +16,14 @@ pub struct FilesystemEntry {
 
     //write functionality
     pub content : Option<Vec<u8>>,
-    pub write : boolean,
+    pub write : bool,
     pub write_mode : u32,
 
+}
+struct Git_entry {
+    pub oid : Oid,
+    pub name : String,
+    pub file_mode : i32,
 }
 impl FilesystemEntry {
     pub fn new(file_type : FileType, name : String, path : String, inodes : &mut Vec<String>) -> FilesystemEntry {
@@ -177,7 +182,7 @@ impl FilesystemEntry {
                     ino: inodes.len() - 1,
                     children : Vec::new(),
                     size,
-                    content : Vec::new(),
+                    content : Some(Vec::new()),
                     write : false,
                     write_mode : 0,
                     file_mode,
@@ -207,21 +212,27 @@ impl FilesystemEntry {
                 }
         }
     }
-    pub fn to_git_object(&self, &mut repo :Repository) -> Option<Oid> {
+    pub fn to_git_object(&self, repo :&mut Repository) -> Option<Oid> {
         match self.file_type {
             FileType::RegularFile => {
                 return self.oid;
 
             },
             FileType::Directory => {
+                let mut entries = Vec::new();
+                for child in &self.children {
+                    let oid = match child.to_git_object(repo) {
+                        Some(oid) => oid,
+                        None => {continue}
+                    };
+                    let name = child.name.clone();
+                    let file_mode = child.file_mode.clone();
+                    entries.push(Git_entry{name,oid,file_mode});
+                }
                 match repo.treebuilder(None) {
-                    Ok(tb) => {
-                        for child in &self.children {
-                            let oid = match child.to_git_object(repo) {
-                                Some(oid) => oid,
-                                None => {}
-                            };
-                            tb.insert(child.name,oid,child.file_mode);
+                    Ok(mut tb) => {
+                        for entry in entries {
+                            tb.insert(entry.name,entry.oid,entry.file_mode);
                         }
                         Some(tb.write().unwrap())
                     },
@@ -231,6 +242,7 @@ impl FilesystemEntry {
 
                 }
             }
+            _ => None,
         }
     }
 }
