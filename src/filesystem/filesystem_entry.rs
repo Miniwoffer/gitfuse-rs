@@ -12,17 +12,31 @@ pub struct FilesystemEntry {
     pub ino : usize,
     pub children : Vec<FilesystemEntry>,
     pub size : u64,
+    pub file_mode : i32,
+
+    //write functionality
+    pub content : Option<Vec<u8>>,
+    pub write : boolean,
+    pub write_mode : u32,
+
 }
 impl FilesystemEntry {
     pub fn new(file_type : FileType, name : String, path : String, inodes : &mut Vec<String>) -> FilesystemEntry {
         inodes.push(path+"/"+name.as_str());
-        FilesystemEntry{
+        FilesystemEntry {
             name,
             file_type,
-            oid : None,
-            ino : inodes.len()-1,
-            children : Vec::new(),
-            size : 0u64,
+            oid: None,
+            ino: inodes.len() - 1,
+            children: Vec::new(),
+            size: 0u64,
+            content: match file_type {
+                FileType::RegularFile => Some(Vec::new()),
+                _ => None,
+            },
+            write: false,
+            write_mode : 0,
+            file_mode : 0,
         }
     }
     pub fn add(&mut self, file : FilesystemEntry) -> Option<&FilesystemEntry>{
@@ -114,7 +128,7 @@ impl FilesystemEntry {
         }
         None
     }
-    pub fn from_tree(tree : &Tree, repo : &Repository, name : String, mut path : String, inodes : &mut Vec<String>) -> FilesystemEntry {
+    pub fn from_tree(tree : &Tree, repo : &Repository, name : String, mut path : String, inodes : &mut Vec<String>, file_mode : i32) -> FilesystemEntry {
         let mut children  = Vec::new();
         if !path.is_empty() {
             path = path + "/";
@@ -132,11 +146,16 @@ impl FilesystemEntry {
             ino : inodes.len()-1,
             children,
             size : 0u64,
+            content : None,
+            write : false,
+            write_mode : 0,
+            file_mode,
 
         }
     }
     pub fn from_tree_entry(treeEntry : &TreeEntry, repo : &Repository, path:String, inodes : &mut Vec<String>) -> FilesystemEntry {
         let name : String = treeEntry.name().unwrap().to_owned();
+        let file_mode = treeEntry.filemode();
         let treeEntry = treeEntry.to_object(repo).unwrap();
         let mut full_path = path.clone();
         if !full_path.is_empty(){
@@ -158,13 +177,17 @@ impl FilesystemEntry {
                     ino: inodes.len() - 1,
                     children : Vec::new(),
                     size,
+                    content : Vec::new(),
+                    write : false,
+                    write_mode : 0,
+                    file_mode,
                 }
 
             },
             Err(e) => {},
         };
         match treeEntry.as_tree() {
-            Some(t) =>  FilesystemEntry::from_tree(t,repo,name,path,inodes),
+            Some(t) =>  FilesystemEntry::from_tree(t,repo,name,path,inodes,file_mode),
             None => //empty tree?
                 {
                     println!("Folder:{}",full_path);
@@ -176,10 +199,38 @@ impl FilesystemEntry {
                         ino: inodes.len() - 1,
                         children: Vec::new(),
                         size: 0,
+                        content : None,
+                        write : false,
+                        write_mode : 0,
+                        file_mode,
                     }
                 }
         }
     }
-    pub fn to_git_object(&self, repo :&Repository) {
+    pub fn to_git_object(&self, &mut repo :Repository) -> Option<Oid> {
+        match self.file_type {
+            FileType::RegularFile => {
+                return self.oid;
+
+            },
+            FileType::Directory => {
+                match repo.treebuilder(None) {
+                    Ok(tb) => {
+                        for child in &self.children {
+                            let oid = match child.to_git_object(repo) {
+                                Some(oid) => oid,
+                                None => {}
+                            };
+                            tb.insert(child.name,oid,child.file_mode);
+                        }
+                        Some(tb.write().unwrap())
+                    },
+                    Err(e) => {
+                        panic!(e);
+                    }
+
+                }
+            }
+        }
     }
 }

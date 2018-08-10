@@ -1,5 +1,6 @@
 mod filesystem_entry;
 pub mod error_codes;
+pub mod access_codes;
 
 use git2::{Repository,Oid,Signature};
 use fuse::*;
@@ -22,6 +23,7 @@ pub struct GitFilesystem<'collection> {
     inods : Vec<String>,
     files : filesystem_entry::FilesystemEntry,
     ttl : i64,
+
 }
 impl<'collection> GitFilesystem<'collection> {
     pub fn new (repo_path : &str,referance : &'collection str) -> GitFilesystem<'collection> {
@@ -187,6 +189,45 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         let ttl = Timespec::new(self.ttl,0);
         reply.entry(&ttl,&file_attr,0);
     }
+    fn mknod(
+        &mut self,
+        _req: &Request,
+        parent: u64,
+        name: &OsStr,
+        _mode: u32,
+        _rdev: u32,
+        reply: ReplyEntry
+    ) {
+        let path = self.inods[parent as usize].clone();
+        let name = match name.to_str() {
+            Some(s) => s.to_string(),
+            None => {
+                reply.error(error_codes::EPERM); // TODO: invalid name error??
+                return
+            },
+        };
+        let new_file = filesystem_entry::FilesystemEntry::new(FileType::RegularFile,
+                                                              name,
+                                                              path.to_string(),
+                                                              &mut self.inods);
+        let file_attr = self.get_attrs(&new_file);
+        let file = match self.files.get_path_mut(path.as_str()) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        match file.add(new_file) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::EEXIST);
+                return
+            },
+        };
+        let ttl = Timespec::new(self.ttl,0);
+        reply.entry(&ttl,&file_attr,0);
+    }
     fn rmdir(
         &mut self,
         _req: &Request,
@@ -297,19 +338,34 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
 
         }
     }
-    fn open(&mut self, _req: &Request, _ino: u64, _flags: u32, reply: ReplyOpen) {
+    fn open(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
+        let path = &self.inods[ino as usize];
+        let entry = match self.files.get_path(path.as_str()) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
 
-    }
-    fn write(
-        &mut self,
-        _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        data: &[u8],
-        _flags: u32,
-        reply: ReplyWrite
-    ) {
+        //Write
+        if flags & access_codes::O_ACCMODE && !entry.write {
+            let content = match entry.oid {
+                Some(oid) => {
 
+                },
+                None => {
+                    return [0u8];
+                }
+            }
+            if flags & access_codes::O_TRUNC {
+
+            }
+
+        }//Read only
+        else {
+            reply.opened(0,access_codes::O_RDONLY);
+
+        }
     }
 }
