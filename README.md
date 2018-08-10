@@ -9,9 +9,14 @@ Install git and fuse
 
 Navigate git_fue_rs dir and run
 ```
-cargo run
+cargo build
 ```
-**USAGE
+And navigate to target/build/debug/
+
+```
+./git-fuse [args]
+```
+USAGE
 ```
 git filesystem 0.1.0
 
