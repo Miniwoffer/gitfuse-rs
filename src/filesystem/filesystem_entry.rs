@@ -68,7 +68,6 @@ impl FilesystemEntry {
         };
         //let (name,rest) = path.split_at(split);
         //let (_,rest) = rest.split_at(1);
-        println!("Split {}:{}",name,rest);
         let ret = match self.index(name) {
             Some(s) => match s.get_path(rest) {
                 Some(s) => s,
@@ -124,7 +123,6 @@ impl FilesystemEntry {
         }
 
         inodes.push(path.clone() + name.as_str());
-        println!("Folder:{}",path+name.as_str());
         FilesystemEntry{
             name,
             file_type : FileType::Directory,
@@ -148,7 +146,6 @@ impl FilesystemEntry {
 
         match treeEntry.clone().into_blob() {
             Ok(f) => {
-                println!("File:{}",full_path);
                 let size = f.content().len() as u64;
                 inodes.push(full_path);
                 return FilesystemEntry {
@@ -167,7 +164,6 @@ impl FilesystemEntry {
             Some(t) =>  FilesystemEntry::from_tree(t,repo,name,path,inodes),
             None => //empty tree?
                 {
-                    println!("Folder:{}",full_path);
                     inodes.push(full_path);
                     FilesystemEntry {
                         name,
