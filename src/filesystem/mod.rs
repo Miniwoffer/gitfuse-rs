@@ -8,6 +8,7 @@ use fuse::*;
 use std::io::Write;
 use std::ffi::OsStr;
 use std::path::Path;
+use std::vec::Vec;
 
 
 use std::os::raw::c_int;
@@ -315,7 +316,8 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             Some(e) => match e.oid {
                 Some(e) => e,
                 None => {
-                    reply.error(error_codes::ENOENT);
+                    reply.data(&[0u8,0]);
+                    //reply.error(error_codes::ENOENT);
                     return;
                 }
             },
@@ -339,9 +341,37 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
 
         }
     }
+    fn write(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        data: &[u8],
+        _flags: u32,
+        reply: ReplyWrite
+    ) {
+        let path = &self.inods[ino as usize];
+        let entry = match self.files.get_path_mut(path.as_str()) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        let mut content = match entry.content {
+            Some(ref mut c) => c,
+            None => return reply.error(error_codes::EIO),
+        };
+        let tail = &mut content.split_off(offset as usize);
+        content.append(&mut data.to_owned());
+        content.append(tail);
+
+
+    }
     fn open(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
         let path = &self.inods[ino as usize];
-        let entry = match self.files.get_path(path.as_str()) {
+        let entry = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
             None => {
                 reply.error(error_codes::ENOENT);
@@ -351,6 +381,11 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
 
         //Write
         if flags & access_codes::O_ACCMODE > 0 && !entry.write {
+            if entry.write {
+                reply.error(error_codes::ETXTBSY);
+                return;
+
+            }
             let content = match entry.oid {
                 Some(oid) => {
                     match self.repository.find_blob(oid) {
@@ -367,14 +402,68 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                     Vec::new()
                 }
             };
-            if flags & access_codes::O_TRUNC > 0 {
-
-            }
-
+            entry.content = Some(content);
+            entry.write = true;
+            entry.write_mode = flags;
+            reply.opened(0,flags);
         }//Read only
         else {
             reply.opened(0,access_codes::O_RDONLY);
-
         }
+    }
+    fn release(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        _flags: u32,
+        _lock_owner: u64,
+        flush: bool,
+        reply: ReplyEmpty
+    ) {
+        let path = &self.inods[ino as usize];
+        let entry = match self.files.get_path_mut(path.as_str()) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        if flush {
+            match self.repository.blob(match entry.content.as_ref() {
+                Some(ar) => ar,
+                None => return reply.error(error_codes::EIO), }) {
+                Ok(oid) =>  {
+                    entry.oid = Some(oid);
+                    entry.write = false;
+                },
+                Err(e) => return reply.error(error_codes::EIO),
+            }
+        }
+        reply.ok();
+    }
+    fn flush(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
+        reply: ReplyEmpty
+    ) {
+        let path = &self.inods[ino as usize];
+        let entry = match self.files.get_path_mut(path.as_str()) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        match self.repository.blob(match entry.content.as_ref() {
+            Some(ar) => ar,
+            None => return reply.error(error_codes::EIO), }) {
+                Ok(oid) => entry.oid = Some(oid),
+                Err(e) => return reply.error(error_codes::EIO),
+        }
+        reply.ok();
     }
 }
