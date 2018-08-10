@@ -129,7 +129,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             path = path + "/";
         }
         path = path + name.to_str().unwrap();
-        println!("lookup:{}",path);
         let file = match self.files.get_path(path.as_str()) {
                 Some(e) => e,
                 None => {
@@ -137,7 +136,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                     return;
                 }
         };
-        println!("lookup found {} = {}",path,file.name);
         let ttl = Timespec::new(self.ttl,0);
         let file_attr = self.get_attrs(file);
         reply.entry(&ttl,&file_attr, 0); // TODO: What does generation do?
@@ -145,7 +143,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
     }
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         let path = &self.inods[ino as usize];
-        println!("getattr:{}",path);
         let file = match self.files.get_path(path.as_str()) {
             Some(e) => e,
             None => {
@@ -284,7 +281,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         mut reply: ReplyDirectory
     ) {
         let path = &self.inods[ino as usize];
-        println!("readdir:{}",path);
         let folder = match self.files.get_path(path.as_str()) {
             Some(e) => e,
             None => {
@@ -292,7 +288,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 return;
             }
         };
-        println!("dir:{}",folder.name);
         if offset == 0 {
             reply.add(ino, 0, FileType::Directory, ".");
             reply.add(ino, 1, FileType::Directory, "..");

@@ -14,7 +14,7 @@ use clap::{App,Arg};
 fn main() {
     let args = App::new("git filesystem")
         .version("0.1.0")
-        .arg(Arg::with_name("repository path")
+        .arg(Arg::with_name("Repository path")
             .short("g")
             .long("git_path")
             .value_name("PATH")
@@ -33,9 +33,9 @@ fn main() {
             .help("The path to where the filesystem will mount")
             .takes_value(true).required(true)).get_matches();
 
-    let path = args.value_of("git_path").unwrap();
-    let git_tag = args.value_of("git_path").unwrap_or("HEAD");
-    let mount_point = args.value_of("git_path").unwrap();
+    let path = args.value_of("Repository path").unwrap();
+    let git_tag = args.value_of("Git tag").unwrap_or("HEAD");
+    let mount_point = args.value_of("Mount point").unwrap();
 
     let filesys = filesystem::GitFilesystem::new(path,git_tag);
     let path = Path::new(mount_point);
