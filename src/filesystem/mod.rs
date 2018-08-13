@@ -11,6 +11,7 @@ use std::path::Path;
 use std::vec::Vec;
 
 use std::os::raw::c_int;
+use std::sync::Mutex;
 use time::Timespec;
 
 // TODO: Check all error codes
@@ -76,6 +77,7 @@ impl<'collection> GitFilesystem<'collection> {
         }
     }
 
+
     fn get_attrs(&self, entry: &filesystem_entry::FilesystemEntry) -> FileAttr {
         //TODO: find out what we can get from entry.filemode()
         let mut file_attr = FileAttr {
@@ -107,7 +109,7 @@ impl<'collection> GitFilesystem<'collection> {
         file_attr
     }
 
-    fn commit(&mut self) {
+    pub fn commit(&mut self) {
         let new_tree = match self.files.to_git_object(&mut self.repository) {
             Some(nt) => nt,
             None => panic!("Failed to commit."),
@@ -120,7 +122,7 @@ impl<'collection> GitFilesystem<'collection> {
             .unwrap()
             .peel_to_commit()
             .unwrap();
-        let sign = Signature::now("git-fs", "").unwrap();
+        let sign = Signature::now("git-fs", "git-fs@gitfs.com").unwrap();
 
         //TODO: Do we update the ref? if not we need to find another way to get "last_commit"
         match self.repository.commit(
@@ -131,9 +133,15 @@ impl<'collection> GitFilesystem<'collection> {
             &tree,
             &[&last_commit],
         ) {
-            Ok(_) => println!("Commit complete"),
+            Ok(oid) => println!("Commit complete:{}",oid),
             Err(e) => println!("{}", e),
         };
+    }
+}
+impl<'collection>  Drop for GitFilesystem<'collection>  {
+    fn drop(&mut self) {
+        println!("....");
+        self.commit();
     }
 }
 
