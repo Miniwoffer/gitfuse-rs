@@ -44,7 +44,10 @@ fn main() {
     let git_tag = args.value_of("Git tag").unwrap_or("HEAD");
     let mount_point = args.value_of("Mount point").unwrap();
 
-    let filesys = filesystem::GitFilesystem::new(path, git_tag);
-    let path = Path::new(mount_point);
-    fuse::mount(filesys, &path, &[]).unwrap();
+    {
+        let filesys = filesystem::GitFilesystem::new(path, git_tag);
+        let path = Path::new(mount_point);
+        fuse::mount(filesys, &path, &[]).unwrap();
+    }
+    println!("Shutting down!");
 }

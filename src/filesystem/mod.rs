@@ -3,7 +3,7 @@ pub mod error_codes;
 mod filesystem_entry;
 
 use fuse::*;
-use git2::{Oid, Repository, Signature};
+use git2::{Oid, Repository, Signature,Index};
 
 use std::ffi::OsStr;
 use std::io::Write;
@@ -11,6 +11,7 @@ use std::path::Path;
 use std::vec::Vec;
 
 use std::os::raw::c_int;
+use std::sync::Mutex;
 use time::Timespec;
 
 // TODO: Check all error codes
@@ -23,6 +24,7 @@ pub struct GitFilesystem<'collection> {
     inods: Vec<String>,
     files: filesystem_entry::FilesystemEntry,
     ttl: i64,
+    change_counter: usize,
 }
 impl<'collection> GitFilesystem<'collection> {
     pub fn new(repo_path: &str, referance: &'collection str) -> GitFilesystem<'collection> {
@@ -51,7 +53,7 @@ impl<'collection> GitFilesystem<'collection> {
                 "".to_string(),
                 "".to_string(),
                 &mut inods,
-                0,
+                0o040000,
             );
 
             //Writes a copy of the current tree to git and saves the Oid, this is to hinder the original tree from getting deleted.
@@ -72,8 +74,10 @@ impl<'collection> GitFilesystem<'collection> {
             inods,
             ttl: 10,
             files,
+            change_counter : 0,
         }
     }
+
 
     fn get_attrs(&self, entry: &filesystem_entry::FilesystemEntry) -> FileAttr {
         //TODO: find out what we can get from entry.filemode()
@@ -106,7 +110,7 @@ impl<'collection> GitFilesystem<'collection> {
         file_attr
     }
 
-    fn commit(&mut self) {
+    pub fn commit(&mut self) {
         let new_tree = match self.files.to_git_object(&mut self.repository) {
             Some(nt) => nt,
             None => panic!("Failed to commit."),
@@ -119,7 +123,17 @@ impl<'collection> GitFilesystem<'collection> {
             .unwrap()
             .peel_to_commit()
             .unwrap();
-        let sign = Signature::now("git-fs", "").unwrap();
+        let sign = Signature::now("git-fs", "git-fs@gitfs.com").unwrap();
+
+        let mut index = match Index::new() {
+            Ok(i) =>i,
+            Err(e) => panic!(e),
+        };
+        match index.read_tree(&tree) {
+            Ok(_) =>{},
+            Err(e) => panic!(e),
+        };
+
 
         //TODO: Do we update the ref? if not we need to find another way to get "last_commit"
         match self.repository.commit(
@@ -130,9 +144,17 @@ impl<'collection> GitFilesystem<'collection> {
             &tree,
             &[&last_commit],
         ) {
-            Ok(_) => println!("Commit complete"),
+            Ok(oid) => {
+                self.repository.set_index(&mut index);
+                println!("Commit complete:{}",oid)
+            },
             Err(e) => println!("{}", e),
         };
+    }
+}
+impl<'collection>  Drop for GitFilesystem<'collection>  {
+    fn drop(&mut self) {
+        self.commit();
     }
 }
 
@@ -188,6 +210,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             name,
             path.to_string(),
             &mut self.inods,
+            0o040000,
         );
         let file_attr = self.get_attrs(&new_file);
         let file = match self.files.get_path_mut(path.as_str()) {
@@ -229,6 +252,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             name,
             path.to_string(),
             &mut self.inods,
+            33188,
         );
         let file_attr = self.get_attrs(&new_file);
         let file = match self.files.get_path_mut(path.as_str()) {
@@ -344,6 +368,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 reply.data(content);
             }
             Err(e) => {
+                eprintln!("{}",e);
                 reply.error(error_codes::ENOENT);
             }
         }
@@ -402,6 +427,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 Some(oid) => match self.repository.find_blob(oid) {
                     Ok(blob) => blob.content().to_owned(),
                     Err(e) => {
+                        eprintln!("{}",e);
                         Vec::new()
                     },
                 },
@@ -417,6 +443,79 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             reply.opened(0, access_codes::O_RDONLY);
         }
     }
+    fn create(
+        &mut self,
+        _req: &Request,
+        parent: u64,
+        name: &OsStr,
+        _mode: u32,
+        flags: u32,
+        reply: ReplyCreate
+    ) {
+        let path = self.inods[parent as usize].clone();
+        let name = match name.to_str() {
+            Some(s) => s.to_string(),
+            None => {
+                reply.error(error_codes::EPERM); // TODO: invalid name error??
+                return;
+            }
+        };
+        let mut new_file = filesystem_entry::FilesystemEntry::new(
+            FileType::RegularFile,
+            name,
+            path.to_string(),
+            &mut self.inods,
+            33188,
+        );
+        new_file.content = Some(Vec::new());
+        new_file.write = true;
+        new_file.write_mode = flags;
+        let file_attr = self.get_attrs(&new_file);
+        let file = match self.files.get_path_mut(path.as_str()) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        match file.add(new_file) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::EEXIST);
+                return;
+            }
+        };
+        let ttl = Timespec::new(self.ttl, 0);
+        reply.created(&ttl, &file_attr, 0,0,flags);
+
+    }
+    fn unlink(
+        &mut self,
+        _req: &Request,
+        parent: u64,
+        name: &OsStr,
+        reply: ReplyEmpty
+    ) {
+        let name = match name.to_str() {
+            Some(s) => s,
+            None => {
+                reply.error(error_codes::EPERM); // TODO: invalid name error??
+                return;
+            }
+        };
+        let path = self.inods[parent as usize].clone();
+        let file = match self.files.get_path_mut(path.as_str()) {
+            Some(e) => e,
+            None => {
+                reply.error(error_codes::ENOENT);
+                return;
+            }
+        };
+        match file.remove(name, FileType::RegularFile, &mut self.inods) {
+            Ok(_) => reply.ok(),
+            Err(e) => reply.error(e),
+        }
+    }
     fn release(
         &mut self,
         _req: &Request,
@@ -427,6 +526,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         flush: bool,
         reply: ReplyEmpty,
     ) {
+        {
         let path = &self.inods[ino as usize];
         let entry = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
@@ -436,7 +536,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             }
         };
         if flush && entry.content.is_some() {
-            let len ;
+            let len;
             match self.repository.blob(match entry.content.as_ref() {
                 Some(ar) => {
                     len = ar.len();
@@ -451,14 +551,21 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                     entry.oid = Some(oid);
                     entry.write = false;
                 }
-                Err(e) =>{
+                Err(e) => {
                     return reply.error(error_codes::EIO)
                 },
             }
         }
         reply.ok();
+        }
+        self.change_counter += 1;
+        if self.change_counter > 10 {
+            self.commit();
+            self.change_counter = 0;
+        }
     }
     fn flush(&mut self, _req: &Request, ino: u64, _fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
+        {
         let path = &self.inods[ino as usize];
         let entry = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
@@ -484,6 +591,12 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 return reply.error(error_codes::EIO)
             },
         };
+        }
+        self.change_counter += 1;
+        if self.change_counter > 10 {
+            self.commit();
+            self.change_counter = 0;
+        }
         reply.ok();
     }
 }

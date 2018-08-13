@@ -26,7 +26,7 @@ struct GitEntry {
     pub file_mode: i32,
 }
 impl FilesystemEntry {
-    pub fn new(file_type: FileType, name: String, path: String, inodes: &mut Vec<String>) -> Self {
+    pub fn new(file_type: FileType, name: String, path: String, inodes: &mut Vec<String>, file_mode : i32) -> Self {
         inodes.push(path + "/" + name.as_str());
         Self {
             name,
@@ -41,7 +41,7 @@ impl FilesystemEntry {
             },
             write: false,
             write_mode: 0,
-            file_mode: 0,
+            file_mode,
         }
     }
     pub fn add(&mut self, file: FilesystemEntry) -> Option<&FilesystemEntry> {
@@ -250,6 +250,18 @@ impl FilesystemEntry {
                         name,
                         oid,
                         file_mode,
+                    });
+                }
+                if entries.is_empty() {
+                    let oid = match repo.blob(&[0u8,0]) {
+                        Ok(oid) => oid,
+                        Err(e) => panic!(e),
+                    };
+                    println!("{:?}",oid);
+                    entries.push( GitEntry{
+                       name : ".gitfs".to_owned(),
+                        oid : oid,
+                        file_mode : 0o100000,
                     });
                 }
                 match repo.treebuilder(None) {
