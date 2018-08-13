@@ -154,7 +154,6 @@ impl<'collection> GitFilesystem<'collection> {
 }
 impl<'collection>  Drop for GitFilesystem<'collection>  {
     fn drop(&mut self) {
-        println!("....");
         self.commit();
     }
 }
@@ -213,7 +212,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             &mut self.inods,
             0o040000,
         );
-        println!("{:?}",new_file);
         let file_attr = self.get_attrs(&new_file);
         let file = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
@@ -256,7 +254,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             &mut self.inods,
             33188,
         );
-        println!("path:{:?},ino:{}",path,parent);
         let file_attr = self.get_attrs(&new_file);
         let file = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
@@ -362,7 +359,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 return;
             }
         };
-        println!("INO:{},OID:{},PATH:{}",ino,oid,path);
         match self.repository.find_blob(oid) {
             Ok(blob) => {
                 let (_, content) = blob.content().split_at(offset as usize);
@@ -409,7 +405,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             content.append(&mut data.to_owned());
         }
         reply.written(data.len() as u32);
-        println!("{:?}",String::from_utf8(content.to_owned()).unwrap());
 
     }
     fn open(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
@@ -424,7 +419,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
 
         //Write
         if flags & access_codes::O_ACCMODE > 0 && !entry.write {
-            println!("{}:{}:{:?}",ino,path,entry.oid);
             if entry.write {
                 reply.error(error_codes::ETXTBSY);
                 return;
@@ -476,7 +470,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         new_file.content = Some(Vec::new());
         new_file.write = true;
         new_file.write_mode = flags;
-        println!("path:{:?},ino:{}",path,parent);
         let file_attr = self.get_attrs(&new_file);
         let file = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
@@ -534,7 +527,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         reply: ReplyEmpty,
     ) {
         {
-        println!("release");
         let path = &self.inods[ino as usize];
         let entry = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
@@ -551,7 +543,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                     ar
                 },
                 None => {
-                    println!("No content in buffer.");
                     return reply.error(error_codes::EIO)
                 },
             }) {
@@ -561,7 +552,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                     entry.write = false;
                 }
                 Err(e) => {
-                    println!("{}", e);
                     return reply.error(error_codes::EIO)
                 },
             }
@@ -581,7 +571,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             Some(e) => e,
             None => return reply.error(error_codes::ENOENT),
         };
-        println!("flush");
         let mut len;
         let content = match entry.content {
             Some(ref ar) => {
@@ -589,7 +578,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 ar.to_owned()
             },
             None => {
-                println!("No content in buffer.");
                 return reply.error(error_codes::EIO)
             },
         };
@@ -600,7 +588,6 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 entry.oid = Some(oid);
             },
             Err(e) => {
-                println!("{}", e);
                 return reply.error(error_codes::EIO)
             },
         };
