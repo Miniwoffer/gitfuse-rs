@@ -1,0 +1,3 @@
+cyclomatic-complexity-threshold = 30
+#clippy = "warn"
+#clippy_pedantic = "warn"
