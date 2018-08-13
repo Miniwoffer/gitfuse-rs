@@ -106,12 +106,16 @@ impl<'collection> GitFilesystem<'collection> {
 
 
         //TODO: Do we update the ref? if not we need to find another way to get "last_commit"
-        self.repository.commit(Some(self.referance),
+        match self.repository.commit(Some(self.referance),
                                &sign,
                                &sign,
                                "Automated commit from git-fs",
                                &tree,
-                               &[&last_commit]);
+                               &[&last_commit]) {
+            Ok(_) => println!("Commit complete"),
+            Err(e) => println!("{}",e),
+
+        };
     }
 }
 
@@ -451,12 +455,9 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         reply: ReplyEmpty
     ) {
         let path = &self.inods[ino as usize];
-        let entry = match self.files.get_path_mut(path.as_str()) {
-            Some(e) => e,
-            None => {
+        let entry = if let Some(e) = self.files.get_path_mut(path.as_str()) {e} else {
                 reply.error(error_codes::ENOENT);
                 return;
-            }
         };
         match self.repository.blob(match entry.content.as_ref() {
             Some(ar) => ar,

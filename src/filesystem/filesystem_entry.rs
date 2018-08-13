@@ -20,15 +20,15 @@ pub struct FilesystemEntry {
     pub write_mode : u32,
 
 }
-struct Git_entry {
+struct GitEntry {
     pub oid : Oid,
     pub name : String,
     pub file_mode : i32,
 }
 impl FilesystemEntry {
-    pub fn new(file_type : FileType, name : String, path : String, inodes : &mut Vec<String>) -> FilesystemEntry {
+    pub fn new(file_type : FileType, name : String, path : String, inodes : &mut Vec<String>) -> Self {
         inodes.push(path+"/"+name.as_str());
-        FilesystemEntry {
+        Self {
             name,
             file_type,
             oid: None,
@@ -104,7 +104,7 @@ impl FilesystemEntry {
         };
         let (name,rest) = path.split_at(split);
 
-        let ret = match self.indexMut(name) {
+        let ret = match self.index_mut(name) {
             Some(s) => match s.get_path_mut(rest) {
                 Some(s) => s,
                 None => return None,
@@ -123,7 +123,7 @@ impl FilesystemEntry {
         None
 
     }
-    pub fn indexMut(&mut self,index : & str) -> Option<&mut FilesystemEntry> {
+    pub fn index_mut(&mut self, index : & str) -> Option<&mut FilesystemEntry> {
         for child in self.children.iter_mut() {
             if child.name == index {
                 return Some(child)
@@ -142,7 +142,7 @@ impl FilesystemEntry {
         }
 
         inodes.push(path.clone() + name.as_str());
-        FilesystemEntry{
+        Self {
             name,
             file_type : FileType::Directory,
             oid : Some(tree.id()),
@@ -223,7 +223,7 @@ impl FilesystemEntry {
                     };
                     let name = child.name.clone();
                     let file_mode = child.file_mode.clone();
-                    entries.push(Git_entry{name,oid,file_mode});
+                    entries.push(GitEntry {name,oid,file_mode});
                 }
                 match repo.treebuilder(None) {
                     Ok(mut tb) => {

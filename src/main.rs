@@ -1,15 +1,16 @@
-
+#![cfg_attr(feature = "cargo-clippy", warn(clippy))]
+#![cfg_attr(feature = "cargo-clippy", warn(clippy_pedantic))]
 
 extern crate fuse;
 extern crate git2;
 extern crate libc;
 extern crate time;
+extern crate clap;
+
+use clap::{App,Arg};
 
 mod filesystem;
-
 use std::path::Path;
-extern  crate clap;
-use clap::{App,Arg};
 
 fn main() {
     let args = App::new("git filesystem")
