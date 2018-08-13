@@ -1,13 +1,11 @@
-
 //Access
-pub static  O_RDONLY    : u32 = 0x0000; // Open file in read only
-pub static  O_WRONLY    : u32 = 0x0001; // Open file in write only
-pub static  O_RDWR		: u32 = 0x0002; // Open file in read write
-pub static  O_ACCMODE	: u32 = 0x0003; // Mask for write
-
+pub static O_RDONLY: u32 = 0x0000; // Open file in read only
+pub static O_WRONLY: u32 = 0x0001; // Open file in write only
+pub static O_RDWR: u32 = 0x0002; // Open file in read write
+pub static O_ACCMODE: u32 = 0x0003; // Mask for write
 
 //Modifiers
-pub static O_CREAT		: u32 = 0x0100;
+pub static O_CREAT: u32 = 0x0100;
 /*
  If  the file exists, this flag has no effect except as noted under O_EXCL below.
 Otherwise, the file shall be created; the user ID of the file shall  be  set  to
@@ -27,7 +25,7 @@ implementation-defined  way  to  initialize the file's group ID to the effective
 group ID of the calling process.
 */
 
-pub static O_EXCL		: u32 = 0x0200;
+pub static O_EXCL: u32 = 0x0200;
 /*
 If  O_CREAT  and O_EXCL are set, open() shall fail if the file exists. The check
 for the existence of the file and the creation of the file if it does not  exist
@@ -38,7 +36,7 @@ to [EEXIST], regardless of the contents of the symbolic link. If O_EXCL  is  set
 and O_CREAT is not set, the result is undefined.
 */
 
-pub static O_NOCTTY	    : u32 = 0x0400;
+pub static O_NOCTTY: u32 = 0x0400;
 /*
 If  set and path identifies a terminal device, open() shall not cause the termi‐
 nal device to become the controlling terminal for the process. If path does  not
@@ -46,7 +44,7 @@ identify a terminal device, O_NOCTTY shall be ignored.
 
 */
 
-pub static O_TRUNC		: u32 = 0x0800;
+pub static O_TRUNC: u32 = 0x0800;
 /*
 If  the  file  exists and is a regular file, and the file is successfully opened
 O_RDWR or O_WRONLY, its length shall be truncated to 0, and the mode  and  owner
@@ -55,6 +53,5 @@ device files. Its effect on other  file  types  is  implementation-defined.  The
 result of using O_TRUNC without either O_RDWR or O_WRONLY is undefined.
 */
 
-pub static O_APPEND	    : u32 = 0x1000;
+pub static O_APPEND: u32 = 0x1000;
 /* If set, the file offset shall be set to the end of the file prior to each write. */
-
