@@ -64,7 +64,7 @@ impl<'collection> GitFilesystem<'collection> {
             //commit do not have nano seconds so sett it to 0
             commit_time = Timespec::new(curr_commit.time().seconds(), 0);
         }
-
+        println!("{:?}",inods);
         GitFilesystem {
             repository,
             new_tree,
@@ -190,6 +190,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             path.to_string(),
             &mut self.inods,
         );
+        println!("{:?}",new_file);
         let file_attr = self.get_attrs(&new_file);
         let file = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
@@ -301,6 +302,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         if offset == 0 {
             reply.add(ino, 0, FileType::Directory, ".");
             reply.add(ino, 1, FileType::Directory, "..");
+
         }
         for index in (offset as usize)..folder.children.len() {
             let file = &folder.children[index];
@@ -335,6 +337,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 return;
             }
         };
+        println!("INO:{},OID:{},PATH:{}",ino,oid,path);
         match self.repository.find_blob(oid) {
             Ok(blob) => {
                 let (_, content) = blob.content().split_at(offset as usize);
@@ -344,6 +347,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 reply.data(content);
             }
             Err(e) => {
+                eprintln!("{}",e);
                 reply.error(error_codes::ENOENT);
             }
         }
@@ -359,6 +363,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         reply: ReplyWrite,
     ) {
         let path = &self.inods[ino as usize];
+        let offset = offset as usize;
         let entry = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
             None => {
@@ -370,9 +375,17 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             Some(ref mut c) => c,
             None => return reply.error(error_codes::EIO),
         };
-        let tail = &mut content.split_off(offset as usize);
-        content.append(&mut data.to_owned());
-        content.append(tail);
+        if content.len() > offset {
+            let tail = &mut content.split_off(offset );
+            content.append(&mut data.to_owned());
+            content.append(tail);
+        }
+        else {
+            content.append(&mut data.to_owned());
+        }
+        reply.written(data.len() as u32);
+        println!("{:?}",String::from_utf8(content.to_owned()).unwrap());
+
     }
     fn open(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
         let path = &self.inods[ino as usize];
@@ -386,6 +399,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
 
         //Write
         if flags & access_codes::O_ACCMODE > 0 && !entry.write {
+            println!("{}:{}:{:?}",ino,path,entry.oid);
             if entry.write {
                 reply.error(error_codes::ETXTBSY);
                 return;
@@ -393,7 +407,10 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
             let content = match entry.oid {
                 Some(oid) => match self.repository.find_blob(oid) {
                     Ok(blob) => blob.content().to_owned(),
-                    Err(e) => Vec::new(),
+                    Err(e) => {
+                        eprintln!("{}",e);
+                        Vec::new()
+                    },
                 },
                 None => Vec::new(),
             };
@@ -417,6 +434,7 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
         flush: bool,
         reply: ReplyEmpty,
     ) {
+        println!("release");
         let path = &self.inods[ino as usize];
         let entry = match self.files.get_path_mut(path.as_str()) {
             Some(e) => e,
@@ -425,35 +443,60 @@ impl<'collection> Filesystem for GitFilesystem<'collection> {
                 return;
             }
         };
-        if flush {
+        if flush && entry.content.is_some() {
+            let len ;
             match self.repository.blob(match entry.content.as_ref() {
-                Some(ar) => ar,
-                None => return reply.error(error_codes::EIO),
+                Some(ar) => {
+                    len = ar.len();
+                    ar
+                },
+                None => {
+                    println!("No content in buffer.");
+                    return reply.error(error_codes::EIO)
+                },
             }) {
                 Ok(oid) => {
+                    entry.size = len as u64;
                     entry.oid = Some(oid);
                     entry.write = false;
                 }
-                Err(e) => return reply.error(error_codes::EIO),
+                Err(e) =>{
+                    println!("{}",e);
+                    return reply.error(error_codes::EIO)
+                },
             }
         }
         reply.ok();
     }
     fn flush(&mut self, _req: &Request, ino: u64, _fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
         let path = &self.inods[ino as usize];
-        let entry = if let Some(e) = self.files.get_path_mut(path.as_str()) {
-            e
-        } else {
-            reply.error(error_codes::ENOENT);
-            return;
+        let entry = match self.files.get_path_mut(path.as_str()) {
+            Some(e) => e,
+            None => return reply.error(error_codes::ENOENT),
         };
-        match self.repository.blob(match entry.content.as_ref() {
-            Some(ar) => ar,
-            None => return reply.error(error_codes::EIO),
-        }) {
-            Ok(oid) => entry.oid = Some(oid),
-            Err(e) => return reply.error(error_codes::EIO),
-        }
+        println!("flush");
+        let mut len;
+        let content = match entry.content {
+            Some(ref ar) => {
+                len = ar.len();
+                ar.to_owned()
+            },
+            None => {
+                println!("No content in buffer.");
+                return reply.error(error_codes::EIO)
+            },
+        };
+        match self.repository.blob(content.as_ref()) {
+            Ok(oid) => {
+                entry.size = len as u64;
+                //entry.content = None;
+                entry.oid = Some(oid);
+            },
+            Err(e) => {
+                println!("{}",e);
+                return reply.error(error_codes::EIO)
+            },
+        };
         reply.ok();
     }
 }

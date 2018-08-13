@@ -5,6 +5,7 @@ use std::str::Split;
 
 use fuse::FileType;
 #[derive(PartialEq)]
+#[derive(Debug)]
 pub struct FilesystemEntry {
     pub name: String,
     pub file_type: FileType,
@@ -101,12 +102,19 @@ impl FilesystemEntry {
     }
     pub fn get_path_mut(&mut self, path: &str) -> Option<&mut FilesystemEntry> {
         let mut path = path.to_owned();
-        let split = match path.find('/') {
-            Some(s) => s,
-            None => return Some(self),
+        if path.is_empty() {
+            return Some(self);
+        }
+        let (name, rest) = match path.find('/') {
+            Some(s) => {
+                let (n, a) = path.split_at(s);
+                let (_, a) = a.split_at(1);
+                (n, a)
+            }
+            None => (path.as_str(), ""),
         };
-        let (name, rest) = path.split_at(split);
-
+        //let (name,rest) = path.split_at(split);
+        //let (_,rest) = rest.split_at(1);
         let ret = match self.index_mut(name) {
             Some(s) => match s.get_path_mut(rest) {
                 Some(s) => s,
