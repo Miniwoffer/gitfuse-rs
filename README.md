@@ -14,14 +14,14 @@ cargo build
 And navigate to target/build/debug/
 
 ```
-./git-fuse [args]
+./gitfuse-rs [args]
 ```
 USAGE
 ```
-git filesystem 0.1.0
+gitfuse-rs 0.1.0
 
 USAGE:
-    git-fuse [OPTIONS] --mount_point <PATH> --git_path <PATH>
+    gitfuse-rs [OPTIONS] --mount_point <PATH> --git_path <PATH>
 
 FLAGS:
     -h, --help       Prints help information
