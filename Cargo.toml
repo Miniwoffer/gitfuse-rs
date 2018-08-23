@@ -1,5 +1,5 @@
 [package]
-name = "git-fuse"
+name = "gitfuse-rs"
 version = "0.1.0"
 authors = ["Miniwoffer <odinhorst@hotmail.com>"]
 
